@@ -22,8 +22,9 @@ const loginData = {
     login_type: "hqb"
 };
 
-// Add interval for checking (default: 1 hour)
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 60 * 60 * 1000;
+let isLoggedIn = false;
+let xsrfToken = null;
 
 function parseDate(d) {
     const [day, month, year] = d.split("-").map(Number);
@@ -31,30 +32,61 @@ function parseDate(d) {
 }
 
 async function login() {
-    await client.get("https://roadpolice.am/hy/hqb");
+    try {
+        // First get the initial page to set cookies
+        await client.get(`${BASE_URL}/hy/hqb`);
+        
+        const cookies = await jar.getCookies(BASE_URL);
+        const xsrfCookie = cookies.find(c => c.key === "XSRF-TOKEN");
+        
+        if (!xsrfCookie) throw new Error("Missing XSRF token cookie");
+        
+        xsrfToken = decodeURIComponent(xsrfCookie.value);
+        console.log("XSRF Token:", xsrfToken);
+        
+        const payload = new URLSearchParams(loginData);
+        
+        const res = await client.post(LOGIN_URL, payload.toString(), {
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "X-XSRF-TOKEN": xsrfToken,
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        });
 
-    const cookies = await jar.getCookies(BASE_URL);
-    const xsrf = cookies.find(c => c.key === "XSRF-TOKEN");
-    const session = cookies.find(c => c.key.includes("session"));
-
-    if (!xsrf || !session) throw new Error("Missing XSRF or session cookie");
-    const token = decodeURIComponent(xsrf.value);
-
-    const payload = new URLSearchParams(loginData);
-
-    const res = await client.post(LOGIN_URL, payload.toString(), {
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "X-XSRF-TOKEN": token,
-            "X-Requested-With": "XMLHttpRequest",
+        if (res.data.status !== "OK") {
+            throw new Error("Login failed: " + JSON.stringify(res.data));
         }
-    });
-
-    if (res.data.status !== "OK") throw new Error("Login failed: " + JSON.stringify(res.data));
-    return token;
+        
+        isLoggedIn = true;
+        console.log("✅ Successfully logged in");
+        return xsrfToken;
+    } catch (error) {
+        isLoggedIn = false;
+        xsrfToken = null;
+        throw error;
+    }
 }
 
-async function checkNearestDay(token) {
+async function ensureAuthenticated() {
+    if (!isLoggedIn) {
+        console.log("Not logged in, attempting login...");
+        return await login();
+    }
+    
+    // Verify session is still valid by making a simple request
+    try {
+        // You might want to add a lightweight endpoint to check session validity
+        return xsrfToken;
+    } catch (error) {
+        console.log("Session expired, re-logging in...");
+        return await login();
+    }
+}
+
+async function checkNearestDay() {
+    const token = await ensureAuthenticated();
+    
     const payload = new URLSearchParams({
         branchId: "39",
         serviceId: "300692",
@@ -76,10 +108,8 @@ async function checkNearestDay(token) {
 async function performCheck() {
     try {
         console.log("🔍 Starting check at", new Date().toISOString());
-        const token = await login();
-        console.log("✅ Logged in");
-
-        const result = await checkNearestDay(token);
+        
+        const result = await checkNearestDay();
         console.log("📅 Result:", result);
 
         if (result.status === "OK" && result.data?.day) {
@@ -114,6 +144,10 @@ async function performCheck() {
         };
     } catch (err) {
         console.error("❌ Error:", err.response?.data || err.message);
+        
+        // Reset login state on error
+        isLoggedIn = false;
+        xsrfToken = null;
         
         // Send error notification to Telegram
         try {
