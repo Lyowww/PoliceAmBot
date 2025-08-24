@@ -117,7 +117,7 @@ async function performCheck() {
             console.log("🚨 Nearest date found:", nearest);
 
             // Check if date is before November 10, 2025
-            const targetDate = new Date(2025, 10, 10); // November is month 10 (0-indexed)
+            const targetDate = new Date(2025, 9, 3);// November is month 10 (0-indexed)
             const nearestDate = parseDate(nearest);
             
             if (nearestDate <= targetDate) {
