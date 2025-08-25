@@ -14,6 +14,7 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const BASE_URL = "https://roadpolice.am";
 const LOGIN_URL = `${BASE_URL}/hy/hqb-sw/login`;
 const NEAREST_URL = `${BASE_URL}/hy/hqb-nearest-day`;
+const PROFILE_URL = `${BASE_URL}/hy/hqb-profile`; // Added endpoint to check session validity
 
 const loginData = {
     psn: process.env.PSN,         
@@ -33,6 +34,9 @@ function parseDate(d) {
 
 async function login() {
     try {
+        // Clear existing cookies first to prevent "already authenticated" error
+        await jar.removeAllCookies();
+        
         // First get the initial page to set cookies
         await client.get(`${BASE_URL}/hy/hqb`);
         
@@ -68,18 +72,39 @@ async function login() {
     }
 }
 
+async function checkSessionValidity() {
+    try {
+        // Use a lightweight endpoint to check if session is still valid
+        const res = await client.get(PROFILE_URL, {
+            headers: {
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        });
+        
+        // If we get a valid response, session is still good
+        return res.status === 200;
+    } catch (error) {
+        // If we get an unauthorized error, session is invalid
+        return false;
+    }
+}
+
 async function ensureAuthenticated() {
     if (!isLoggedIn) {
         console.log("Not logged in, attempting login...");
         return await login();
     }
     
-    // Verify session is still valid by making a simple request
+    // Verify session is still valid
     try {
-        // You might want to add a lightweight endpoint to check session validity
+        const isValid = await checkSessionValidity();
+        if (!isValid) {
+            console.log("Session expired, re-logging in...");
+            return await login();
+        }
         return xsrfToken;
     } catch (error) {
-        console.log("Session expired, re-logging in...");
+        console.log("Session check failed, re-logging in...");
         return await login();
     }
 }
@@ -117,7 +142,7 @@ async function performCheck() {
             console.log("🚨 Nearest date found:", nearest);
 
             // Check if date is before November 10, 2025
-            const targetDate = new Date(2025, 9, 3);// November is month 10 (0-indexed)
+            const targetDate = new Date(2025, 9, 3); // November is month 10 (0-indexed)
             const nearestDate = parseDate(nearest);
             
             if (nearestDate <= targetDate) {
