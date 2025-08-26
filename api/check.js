@@ -208,13 +208,6 @@ async function performCheck() {
         isLoggedIn = false;
         xsrfToken = null;
         
-        // Send error notification to Telegram only for non-temporary errors
-        try {
-            await bot.sendMessage(CHAT_ID, `❌ Error in road police check: ${err.message}`);
-        } catch (telegramErr) {
-            console.error("Failed to send Telegram error message:", telegramErr);
-        }
-        
         return { 
             status: 'error', 
             message: err.response?.data || err.message
