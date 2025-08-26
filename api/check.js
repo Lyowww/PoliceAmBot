@@ -14,7 +14,7 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const BASE_URL = "https://roadpolice.am";
 const LOGIN_URL = `${BASE_URL}/hy/hqb-sw/login`;
 const NEAREST_URL = `${BASE_URL}/hy/hqb-nearest-day`;
-const PROFILE_URL = `${BASE_URL}/hy/hqb-profile`; // Added endpoint to check session validity
+const PROFILE_URL = `${BASE_URL}/hy/hqb-profile`;
 
 const loginData = {
     psn: process.env.PSN,         
@@ -26,6 +26,30 @@ const loginData = {
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 60 * 60 * 1000;
 let isLoggedIn = false;
 let xsrfToken = null;
+
+// Function to check if error is temporary service unavailability
+function isTemporaryServiceError(error) {
+    const errorData = error.response?.data || error;
+    
+    // Check for Armenian temporary service error message
+    if (errorData.error === 'Հերթի ծառայությունը ժամանակավորապես անհասանելի է։ Խնդրում ենք փորձել ավելի ուշ') {
+        return true;
+    }
+    
+    // Check for English server error message
+    if (errorData.message === 'Server Error') {
+        return true;
+    }
+    
+    // Check if error contains temporary service keywords
+    const errorString = JSON.stringify(errorData).toLowerCase();
+    if (errorString.includes('temporary') || errorString.includes('unavailable') || 
+        errorString.includes('service') || errorString.includes('server')) {
+        return true;
+    }
+    
+    return false;
+}
 
 function parseDate(d) {
     const [day, month, year] = d.split("-").map(Number);
@@ -170,11 +194,21 @@ async function performCheck() {
     } catch (err) {
         console.error("❌ Error:", err.response?.data || err.message);
         
+        // Check if this is a temporary service error
+        if (isTemporaryServiceError(err)) {
+            console.log("⚠️ Temporary service error, not sending Telegram notification");
+            return { 
+                status: 'temporary_error', 
+                message: 'Temporary service unavailability',
+                error: err.response?.data || err.message
+            };
+        }
+        
         // Reset login state on error
         isLoggedIn = false;
         xsrfToken = null;
         
-        // Send error notification to Telegram
+        // Send error notification to Telegram only for non-temporary errors
         try {
             await bot.sendMessage(CHAT_ID, `❌ Error in road police check: ${err.message}`);
         } catch (telegramErr) {
@@ -195,6 +229,15 @@ module.exports = async (req, res) => {
         return res.status(result.status === 'error' ? 500 : 200).json(result);
     } catch (err) {
         console.error("Unexpected error in HTTP handler:", err);
+        
+        // Check if this is a temporary service error
+        if (isTemporaryServiceError(err)) {
+            return res.status(200).json({ 
+                status: 'temporary_error', 
+                message: 'Temporary service unavailability'
+            });
+        }
+        
         return res.status(500).json({ 
             status: 'error', 
             message: 'Unexpected error: ' + err.message
