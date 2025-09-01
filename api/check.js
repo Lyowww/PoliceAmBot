@@ -56,6 +56,13 @@ function parseDate(d) {
     return new Date(year, month - 1, day);
 }
 
+function formatDateForAPI(date) {
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}-${month}-${year}`;
+}
+
 async function login() {
     try {
         // Clear existing cookies first to prevent "already authenticated" error
@@ -136,11 +143,17 @@ async function ensureAuthenticated() {
 async function checkNearestDay() {
     const token = await ensureAuthenticated();
     
+    // Use current date instead of fixed date to avoid "invalid date" error
+    const currentDate = new Date();
+    const formattedDate = formatDateForAPI(currentDate);
+    
     const payload = new URLSearchParams({
         branchId: "39",
         serviceId: "300692",
-        date: "01-09-2025"
+        date: formattedDate
     });
+
+    console.log("📅 Requesting nearest day with date:", formattedDate);
 
     const res = await client.post(NEAREST_URL, payload.toString(), {
         headers: {
@@ -159,37 +172,49 @@ async function performCheck() {
         console.log("🔍 Starting check at", new Date().toISOString());
         
         const result = await checkNearestDay();
-        console.log("📅 Result:", result);
+        console.log("📅 Result:", JSON.stringify(result, null, 2));
 
         if (result.status === "OK" && result.data?.day) {
             const nearest = result.data.day;
+            const slots = result.data.slots || [];
             console.log("🚨 Nearest date found:", nearest);
+            console.log("📋 Available slots:", slots.length);
 
-            // Check if date is before November 10, 2025
-            const targetDate = new Date(2025, 9, 3); // November is month 10 (0-indexed)
+            const targetDate = new Date(2025, 9, 1); // October 1st, 2025 (month is 0-indexed)
             const nearestDate = parseDate(nearest);
             
             if (nearestDate <= targetDate) {
-                console.log("🚨 Sending message", nearest);
-                await bot.sendMessage(CHAT_ID, `🚨 Nearest date available: ${nearest}`);
+                const message = `🚨 Nearest date available: ${nearest}\nAvailable slots: ${slots.length}\nFirst slot: ${slots[0]?.value || 'N/A'}`;
+                console.log("🚨 Sending message:", message);
+                await bot.sendMessage(CHAT_ID, message);
                 return { 
                     status: 'success', 
                     message: 'Notification sent',
-                    date: nearest
+                    date: nearest,
+                    slots: slots
                 };
             } else {
-                console.log("No suitable date found yet. Nearest is:", nearest);
+                console.log("No suitable date found yet. Nearest is:", nearest, "Target is:", formatDateForAPI(targetDate));
                 return { 
                     status: 'no_change', 
                     message: 'No suitable date found',
-                    date: nearest
+                    date: nearest,
+                    target: formatDateForAPI(targetDate)
                 };
             }
+        } else if (result.status === "INVALID_DATA") {
+            console.log("⚠️ Invalid data error, checking error details:", result.errors);
+            return { 
+                status: 'invalid_data', 
+                message: 'Invalid data provided to API',
+                errors: result.errors
+            };
         }
         
         return { 
             status: 'no_data', 
-            message: 'No date data received'
+            message: 'No date data received',
+            data: result
         };
     } catch (err) {
         console.error("❌ Error:", err.response?.data || err.message);
