@@ -143,27 +143,54 @@ async function ensureAuthenticated() {
 async function checkNearestDay() {
     const token = await ensureAuthenticated();
     
-    // Use current date instead of fixed date to avoid "invalid date" error
-    const currentDate = new Date();
-    const formattedDate = formatDateForAPI(currentDate);
+    // Try different date formats - the API might expect a specific format
+    // Option 1: Try with empty date (let server determine)
+    // Option 2: Try with a future date
+    // Option 3: Try with specific format
+    
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + 30); // 30 days from now
     
     const payload = new URLSearchParams({
         branchId: "39",
         serviceId: "300692",
-        date: formattedDate
+        date: "" // Try with empty date first
     });
 
-    console.log("📅 Requesting nearest day with date:", formattedDate);
+    console.log("📅 Requesting nearest day with empty date");
 
-    const res = await client.post(NEAREST_URL, payload.toString(), {
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "X-XSRF-TOKEN": token,
-            "X-Requested-With": "XMLHttpRequest",
+    try {
+        const res = await client.post(NEAREST_URL, payload.toString(), {
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "X-XSRF-TOKEN": token,
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        });
+
+        return res.data;
+    } catch (error) {
+        // If empty date fails, try with a future date
+        if (error.response?.data?.status === "INVALID_DATA") {
+            console.log("⚠️ Empty date failed, trying with future date...");
+            
+            const formattedDate = formatDateForAPI(futureDate);
+            payload.set("date", formattedDate);
+            
+            console.log("📅 Requesting nearest day with future date:", formattedDate);
+            
+            const res2 = await client.post(NEAREST_URL, payload.toString(), {
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "X-XSRF-TOKEN": token,
+                    "X-Requested-With": "XMLHttpRequest",
+                }
+            });
+            
+            return res2.data;
         }
-    });
-
-    return res.data;
+        throw error;
+    }
 }
 
 // Function to perform the check and send notification if needed
@@ -204,6 +231,14 @@ async function performCheck() {
             }
         } else if (result.status === "INVALID_DATA") {
             console.log("⚠️ Invalid data error, checking error details:", result.errors);
+            
+            // Try one more approach - maybe the API expects a specific date format
+            console.log("🔄 Trying alternative approach...");
+            const alternativeResult = await checkNearestDayAlternative();
+            if (alternativeResult) {
+                return alternativeResult;
+            }
+            
             return { 
                 status: 'invalid_data', 
                 message: 'Invalid data provided to API',
@@ -237,6 +272,35 @@ async function performCheck() {
             status: 'error', 
             message: err.response?.data || err.message
         };
+    }
+}
+
+// Alternative approach for checking nearest day
+async function checkNearestDayAlternative() {
+    try {
+        const token = await ensureAuthenticated();
+        
+        // Try with a very specific date format that might work
+        const payload = new URLSearchParams({
+            branchId: "39",
+            serviceId: "300692",
+            date: "2025-09-01" // Try YYYY-MM-DD format
+        });
+
+        console.log("📅 Alternative: Requesting with YYYY-MM-DD format");
+
+        const res = await client.post(NEAREST_URL, payload.toString(), {
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "X-XSRF-TOKEN": token,
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        });
+
+        return res.data;
+    } catch (error) {
+        console.log("❌ Alternative approach also failed:", error.response?.data || error.message);
+        return null;
     }
 }
 
