@@ -143,21 +143,13 @@ async function ensureAuthenticated() {
 async function checkNearestDay() {
     const token = await ensureAuthenticated();
     
-    // Try different date formats - the API might expect a specific format
-    // Option 1: Try with empty date (let server determine)
-    // Option 2: Try with a future date
-    // Option 3: Try with specific format
-    
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + 30); // 30 days from now
-    
-    const payload = new URLSearchParams({
-        branchId: "39",
-        serviceId: "300692",
-        date: "" // Try with empty date first
-    });
+    // Create the payload in the correct format as specified
+    const payload = new URLSearchParams();
+    payload.append('branchId', '39');
+    payload.append('serviceId', '300692');
+    payload.append('date', '01-10-2025'); // DD-MM-YYYY format
 
-    console.log("📅 Requesting nearest day with empty date");
+    console.log("📅 Requesting nearest day with date: 01-10-2025");
 
     try {
         const res = await client.post(NEAREST_URL, payload.toString(), {
@@ -170,25 +162,7 @@ async function checkNearestDay() {
 
         return res.data;
     } catch (error) {
-        // If empty date fails, try with a future date
-        if (error.response?.data?.status === "INVALID_DATA") {
-            console.log("⚠️ Empty date failed, trying with future date...");
-            
-            const formattedDate = formatDateForAPI(futureDate);
-            payload.set("date", formattedDate);
-            
-            console.log("📅 Requesting nearest day with future date:", formattedDate);
-            
-            const res2 = await client.post(NEAREST_URL, payload.toString(), {
-                headers: {
-                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                    "X-XSRF-TOKEN": token,
-                    "X-Requested-With": "XMLHttpRequest",
-                }
-            });
-            
-            return res2.data;
-        }
+        console.error("❌ Error in checkNearestDay:", error.response?.data || error.message);
         throw error;
     }
 }
@@ -281,11 +255,10 @@ async function checkNearestDayAlternative() {
         const token = await ensureAuthenticated();
         
         // Try with a very specific date format that might work
-        const payload = new URLSearchParams({
-            branchId: "39",
-            serviceId: "300692",
-            date: "2025-09-01" // Try YYYY-MM-DD format
-        });
+        const payload = new URLSearchParams();
+        payload.append('branchId', '39');
+        payload.append('serviceId', '300692');
+        payload.append('date', '2025-09-01'); // Try YYYY-MM-DD format
 
         console.log("📅 Alternative: Requesting with YYYY-MM-DD format");
 
