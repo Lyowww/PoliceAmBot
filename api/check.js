@@ -147,9 +147,9 @@ async function checkNearestDay() {
     const payload = new URLSearchParams();
     payload.append('branchId', '39');
     payload.append('serviceId', '300692');
-    payload.append('date', '20-11-2025'); // DD-MM-YYYY format
+    payload.append('date', '01-11-2025'); // DD-MM-YYYY format
 
-    console.log("📅 Requesting nearest day with date: 20-11-2025");
+    console.log("📅 Requesting nearest day with date: 01-11-2025");
 
     try {
         const res = await client.post(NEAREST_URL, payload.toString(), {
@@ -181,7 +181,7 @@ async function performCheck() {
             console.log("🚨 Nearest date found:", nearest);
             console.log("📋 Available slots:", slots.length);
 
-            const targetDate = new Date(2025, 10, 20); // October 1st, 2025 (month is 0-indexed)
+            const targetDate = new Date(2025, 10, 1); // October 1st, 2025 (month is 0-indexed)
             const nearestDate = parseDate(nearest);
             
             if (nearestDate <= targetDate) {
