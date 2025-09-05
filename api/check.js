@@ -9,7 +9,14 @@ const client = wrapper(axios.create({ jar, withCredentials: true }));
 // Telegram setup
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true }); // polling enabled for /try
+let bot = null;
+
+// Initialize Telegram bot without polling if not in serverless environment
+if (require.main === module) {
+  bot = new TelegramBot(TELEGRAM_TOKEN);
+  // Use webhook method instead of polling to avoid conflicts
+  bot.setWebHook(''); // Empty webhook disables it
+}
 
 const BASE_URL = "https://roadpolice.am";
 const LOGIN_URL = `${BASE_URL}/hy/hqb-sw/login`;
@@ -24,11 +31,12 @@ const loginData = {
 };
 
 const CHECK_INTERVAL = (parseInt(process.env.CHECK_INTERVAL) || 10) * 3 * 1000; // 30 seconds
-const RETRY_DELAY = 10 * 60 * 1000; // 10 minutes
+const RETRY_DELAY = 3 * 60 * 1000; // 3 minutes for daily limit errors
 let isLoggedIn = false;
 let xsrfToken = null;
 let paused = false;
-let errorNotificationSent = false; // Track if error notification was sent
+let errorNotificationSent = false;
+let checkTimer = null;
 
 // Function to check if error is daily limit error
 function isDailyLimitError(error) {
@@ -176,14 +184,26 @@ async function performCheck() {
 
         // 🔹 Handle daily limit
         if (result.status === "ERROR" && result.error?.includes('սահմանաչափը սպառված է')) {
-            paused = true;
-            console.log("⚠️ Daily limit reached, pausing until /try command");
+            console.log("⚠️ Daily limit reached, pausing for 3 minutes");
             
             // Send notification only if not already sent
-            if (!errorNotificationSent) {
-                await bot.sendMessage(CHAT_ID, "⚠️ Օրվա հարցումների սահմանաչափը սպառվել է։ Ստուգումները կանգնեցվեցին։ Գրիր /try վերագործարկելու համար։");
-                errorNotificationSent = true;
+            if (!errorNotificationSent && bot) {
+                try {
+                    await bot.sendMessage(CHAT_ID, "⚠️ Օրվա հարցումների սահմանաչափը սպառվել է։ Ստուգումները դադարեցվեցին 3 րոպեով։");
+                    errorNotificationSent = true;
+                } catch (err) {
+                    console.error("Failed to send Telegram message:", err.message);
+                }
             }
+            
+            // Auto-resume after 3 minutes
+            paused = true;
+            setTimeout(() => {
+                console.log("🔄 Resuming checks after 3 minute pause");
+                paused = false;
+                errorNotificationSent = false;
+                performCheck();
+            }, RETRY_DELAY);
             
             return { status: 'limit_reached', message: 'Daily limit reached, bot paused' };
         }
@@ -197,9 +217,13 @@ async function performCheck() {
             const targetDate = new Date(2025, 10, 1);
             const nearestDate = parseDate(nearest);
 
-            if (nearestDate <= targetDate) {
+            if (nearestDate <= targetDate && bot) {
                 const message = `🚨 Nearest date available: ${nearest}\nAvailable slots: ${slots.length}\nFirst slot: ${slots[0]?.value || 'N/A'}`;
-                await bot.sendMessage(CHAT_ID, message);
+                try {
+                    await bot.sendMessage(CHAT_ID, message);
+                } catch (err) {
+                    console.error("Failed to send Telegram message:", err.message);
+                }
                 return { status: 'success', message: 'Notification sent', date: nearest, slots: slots };
             } else {
                 console.log("No suitable date found. Nearest:", nearest);
@@ -214,22 +238,34 @@ async function performCheck() {
 
         // Handle daily limit error from exception
         if (isDailyLimitError(err)) {
-            paused = true;
-            console.log("⚠️ Daily limit reached, pausing until /try command");
+            console.log("⚠️ Daily limit reached, pausing for 3 minutes");
             
             // Send notification only if not already sent
-            if (!errorNotificationSent) {
-                await bot.sendMessage(CHAT_ID, "⚠️ Օրվա հարցումների սահմանաչափը սպառվել է։ Ստուգումները կանգնեցվեցին։ Գրիր /try վերագործարկելու համար։");
-                errorNotificationSent = true;
+            if (!errorNotificationSent && bot) {
+                try {
+                    await bot.sendMessage(CHAT_ID, "⚠️ Օրվա հարցումների սահմանաչափը սպառվել է։ Ստուգումները դադարեցվեցին 3 րոպեով։");
+                    errorNotificationSent = true;
+                } catch (telegramErr) {
+                    console.error("Failed to send Telegram message:", telegramErr.message);
+                }
             }
+            
+            // Auto-resume after 3 minutes
+            paused = true;
+            setTimeout(() => {
+                console.log("🔄 Resuming checks after 3 minute pause");
+                paused = false;
+                errorNotificationSent = false;
+                performCheck();
+            }, RETRY_DELAY);
             
             return { status: 'limit_reached', message: 'Daily limit reached, bot paused' };
         }
 
         if (isTemporaryServiceError(err)) {
-            console.log("🔄 Temporary service error, will retry in 10 minutes");
+            console.log("🔄 Temporary service error, will retry in 3 minutes");
             
-            // Schedule a retry after 10 minutes
+            // Schedule a retry after 3 minutes
             setTimeout(() => {
                 console.log("🔄 Retrying after temporary service error");
                 performCheck();
@@ -268,28 +304,36 @@ async function checkNearestDayAlternative() {
     }
 }
 
-// 🔹 Telegram command handler
-bot.onText(/\/try/, async (msg) => {
-    if (msg.chat.id.toString() !== CHAT_ID) return;
-    
-    if (paused) {
-        paused = false;
-        errorNotificationSent = false; // Reset error notification flag
-        await bot.sendMessage(CHAT_ID, "✅ Ստուգումները վերագործարկվեցին։");
-        performCheck(); // run one immediately
-    } else {
-        await bot.sendMessage(CHAT_ID, "ℹ️ Ստուգումները արդեն ակտիվ են։");
-        performCheck(); // run check immediately anyway
+// HTTP endpoint for manual triggering
+module.exports = async (req, res) => {
+    try {
+        const result = await performCheck();
+        return res.status(result.status === 'error' ? 500 : 200).json(result);
+    } catch (err) {
+        if (isTemporaryServiceError(err)) {
+            return res.status(200).json({ status: 'temporary_error', message: 'Temporary service unavailability' });
+        }
+        return res.status(500).json({ status: 'error', message: 'Unexpected error: ' + err.message });
     }
-});
+};
 
 // Start scheduled checks
 if (require.main === module) {
     console.log("🚀 Starting Road Police Checker with scheduled checks");
     console.log(`⏰ Check interval: ${CHECK_INTERVAL/1000} seconds`);
+    
+    // Initialize and start checking
     performCheck();
-    setInterval(performCheck, CHECK_INTERVAL);
+    checkTimer = setInterval(performCheck, CHECK_INTERVAL);
 
-    process.on('SIGTERM', () => process.exit(0));
-    process.on('SIGINT', () => process.exit(0));
+    // Cleanup on exit
+    process.on('SIGTERM', () => {
+        if (checkTimer) clearInterval(checkTimer);
+        process.exit(0);
+    });
+    
+    process.on('SIGINT', () => {
+        if (checkTimer) clearInterval(checkTimer);
+        process.exit(0);
+    });
 }
