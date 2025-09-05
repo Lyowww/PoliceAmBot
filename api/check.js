@@ -23,10 +23,18 @@ const loginData = {
     login_type: "hqb"
 };
 
-const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 60 * 60 * 1000;
+const CHECK_INTERVAL = (parseInt(process.env.CHECK_INTERVAL) || 10) * 3 * 1000; // 30 seconds
+const RETRY_DELAY = 10 * 60 * 1000; // 10 minutes
 let isLoggedIn = false;
 let xsrfToken = null;
-let paused = false; // 🔹 new flag
+let paused = false;
+let errorNotificationSent = false; // Track if error notification was sent
+
+// Function to check if error is daily limit error
+function isDailyLimitError(error) {
+    const errorData = error.response?.data || error;
+    return errorData.status === 'ERROR' && errorData.error?.includes('սահմանաչափը սպառված է');
+}
 
 // Function to check if error is temporary service unavailability
 function isTemporaryServiceError(error) {
@@ -163,11 +171,20 @@ async function performCheck() {
         const result = await checkNearestDay();
         console.log("📅 Result:", JSON.stringify(result, null, 2));
 
+        // Reset error notification flag if request was successful
+        errorNotificationSent = false;
+
         // 🔹 Handle daily limit
         if (result.status === "ERROR" && result.error?.includes('սահմանաչափը սպառված է')) {
             paused = true;
             console.log("⚠️ Daily limit reached, pausing until /try command");
-            await bot.sendMessage(CHAT_ID, "⚠️ Օրվա հարցումների սահմանաչափը սպառվել է։ Ստուգումները կանգնեցվեցին։ Գրիր /try վերագործարկելու համար։");
+            
+            // Send notification only if not already sent
+            if (!errorNotificationSent) {
+                await bot.sendMessage(CHAT_ID, "⚠️ Օրվա հարցումների սահմանաչափը սպառվել է։ Ստուգումները կանգնեցվեցին։ Գրիր /try վերագործարկելու համար։");
+                errorNotificationSent = true;
+            }
+            
             return { status: 'limit_reached', message: 'Daily limit reached, bot paused' };
         }
 
@@ -195,7 +212,29 @@ async function performCheck() {
     } catch (err) {
         console.error("❌ Error:", err.response?.data || err.message);
 
+        // Handle daily limit error from exception
+        if (isDailyLimitError(err)) {
+            paused = true;
+            console.log("⚠️ Daily limit reached, pausing until /try command");
+            
+            // Send notification only if not already sent
+            if (!errorNotificationSent) {
+                await bot.sendMessage(CHAT_ID, "⚠️ Օրվա հարցումների սահմանաչափը սպառվել է։ Ստուգումները կանգնեցվեցին։ Գրիր /try վերագործարկելու համար։");
+                errorNotificationSent = true;
+            }
+            
+            return { status: 'limit_reached', message: 'Daily limit reached, bot paused' };
+        }
+
         if (isTemporaryServiceError(err)) {
+            console.log("🔄 Temporary service error, will retry in 10 minutes");
+            
+            // Schedule a retry after 10 minutes
+            setTimeout(() => {
+                console.log("🔄 Retrying after temporary service error");
+                performCheck();
+            }, RETRY_DELAY);
+            
             return { status: 'temporary_error', message: 'Temporary service unavailability' };
         }
 
@@ -229,34 +268,25 @@ async function checkNearestDayAlternative() {
     }
 }
 
-// HTTP endpoint for manual triggering
-module.exports = async (req, res) => {
-    try {
-        const result = await performCheck();
-        return res.status(result.status === 'error' ? 500 : 200).json(result);
-    } catch (err) {
-        if (isTemporaryServiceError(err)) {
-            return res.status(200).json({ status: 'temporary_error', message: 'Temporary service unavailability' });
-        }
-        return res.status(500).json({ status: 'error', message: 'Unexpected error: ' + err.message });
-    }
-};
-
 // 🔹 Telegram command handler
 bot.onText(/\/try/, async (msg) => {
     if (msg.chat.id.toString() !== CHAT_ID) return;
+    
     if (paused) {
         paused = false;
+        errorNotificationSent = false; // Reset error notification flag
         await bot.sendMessage(CHAT_ID, "✅ Ստուգումները վերագործարկվեցին։");
         performCheck(); // run one immediately
     } else {
         await bot.sendMessage(CHAT_ID, "ℹ️ Ստուգումները արդեն ակտիվ են։");
+        performCheck(); // run check immediately anyway
     }
 });
 
 // Start scheduled checks
 if (require.main === module) {
     console.log("🚀 Starting Road Police Checker with scheduled checks");
+    console.log(`⏰ Check interval: ${CHECK_INTERVAL/1000} seconds`);
     performCheck();
     setInterval(performCheck, CHECK_INTERVAL);
 
