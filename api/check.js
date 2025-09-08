@@ -23,19 +23,25 @@ const accounts = [
         phone_number: process.env.PHONE_NUMBER,
         country: "374",
         login_type: "hqb"
+    },
+    {
+        psn: process.env.PSN_2,
+        phone_number: process.env.PHONE_NUMBER_2,
+        country: "374",
+        login_type: "hqb"
+    },
+    {
+        psn: process.env.PSN_3,
+        phone_number: process.env.PHONE_NUMBER_3,
+        country: "374",
+        login_type: "hqb"
+    },
+    {
+        psn: process.env.PSN_4,
+        phone_number: process.env.PHONE_NUMBER_4,
+        country: "374",
+        login_type: "hqb"
     }
-    // {
-    //     psn: process.env.PSN_2,
-    //     phone_number: process.env.PHONE_NUMBER_2,
-    //     country: "374",
-    //     login_type: "hqb"
-    // },
-    // {
-    //     psn: process.env.PSN_3,
-    //     phone_number: process.env.PHONE_NUMBER_3,
-    //     country: "374",
-    //     login_type: "hqb"
-    // }
 ];
 
 let currentAccountIndex = 0;
